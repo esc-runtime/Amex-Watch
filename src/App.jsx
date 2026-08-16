@@ -6,7 +6,7 @@ const JOBS_ENDPOINT = "/.netlify/functions/jobs";
 const SWEEP_ENDPOINT = "/.netlify/functions/sweep-background";
 
 /** Must match COOLDOWN_MS in netlify/functions/sweep-background.js. */
-const COOLDOWN_MS = 15 * 60 * 1000;
+const COOLDOWN_MS = 60 * 60 * 1000;
 
 /** A sweep takes ~9s; poll a little beyond that before giving up. */
 const POLL_INTERVAL_MS = 2000;

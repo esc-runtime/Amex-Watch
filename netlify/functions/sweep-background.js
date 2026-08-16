@@ -16,7 +16,7 @@
 import { getStore } from "@netlify/blobs";
 import { runSweep } from "../lib/runSweep.js";
 
-const COOLDOWN_MS = 15 * 60 * 1000; // one hour
+const COOLDOWN_MS = 60 * 60 * 1000; // one hour
 
 export default async () => {
   const store = getStore("amexwatch");
