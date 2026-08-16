@@ -119,7 +119,7 @@ export const WATCHES = [
   {
     id: "amex-adjacent",
     label: "Adjacent",
-    enabled: false,
+    enabled: true,
     company: [
       "american express",
       "amex",
@@ -128,7 +128,19 @@ export const WATCHES = [
       "american express banking corp",
       "aexp",
     ],
-    keywords: ["itil"],
+    keywords: [
+      "itil",
+      "incident management",
+      "change management",
+      "problem management",
+      "configuration management",
+      "service management",
+      "release management",
+      "asset management",
+      "platform engineering",
+      "observability",
+      "runbook",
+    ],
     exclude: ["intern", "internship", "trainee", "apprentice"],
   },
 
