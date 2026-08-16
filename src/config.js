@@ -119,7 +119,7 @@ export const WATCHES = [
   {
     id: "amex-adjacent",
     label: "Adjacent",
-    enabled: true,
+    enabled: false,
     company: [
       "american express",
       "amex",
