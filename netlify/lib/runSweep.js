@@ -1,107 +1,162 @@
 /**
- * The sweep itself, with no assumptions about how it was triggered.
+ * The sweep: fetch every open requisition for every enabled source and store
+ * it in Postgres.
+ *
+ * Note what this no longer does: matching. With multiple users holding
+ * different watch rules there is no single "matched" set to compute here —
+ * the jobs table is shared, and each user's rules run at read time instead.
  *
  * Two entry points share this:
- *   functions/sweep.js             — cron, four times a day
- *   functions/sweep-background.js  — manual HTTP trigger, 15 minute budget
- *
- * Lives outside src/ deliberately: it imports @netlify/blobs, which is
- * server-only, and nothing here should ever end up in the browser bundle.
+ *   functions/sweep.js             — cron
+ *   functions/sweep-background.js  — manual trigger
  */
 
-import { getStore } from "@netlify/blobs";
 import {
   fetchRequisitionList,
   fetchRequisitionDetail,
   toJob,
   mapLimit,
 } from "../../src/lib/sources/oracle.js";
-import { filterJobs } from "../../src/lib/match.js";
-import { WATCHES, LOCATIONS, SOURCE } from "../../src/config.js";
+import { getServiceClient } from "./supabase.js";
 
-const STORE = "amexwatch";
 const CONCURRENCY = 4;
+const UPSERT_BATCH = 50;
 
-export async function runSweep({ trigger = "unknown" } = {}) {
-  const started = Date.now();
-  const store = getStore(STORE);
+/** Pull every open requisition for one source and normalise it. */
+async function collectJobs(source) {
+  const params = {
+    host: source.host,
+    site: source.site,
+    locationId: source.location_id,
+    companyName: source.company_name,
+    applyUrlBase: source.apply_url_base,
+  };
+
+  const rows = await fetchRequisitionList(params);
+
+  return mapLimit(rows, CONCURRENCY, async (row) => {
+    const detail = await fetchRequisitionDetail({ ...params, id: row.Id });
+    return toJob({ summary: row, detail, ...params });
+  });
+}
+
+/** Shape a normalised job for the jobs table. */
+function toRow(job, sourceId, seenAt) {
+  return {
+    source_id: sourceId,
+    external_id: job.id,
+    title: job.title,
+    company: job.company,
+    location: job.location,
+    campus: job.campus,
+    description: job.description,
+    posted: job.posted || null,
+    workplace_type: job.workplaceType,
+    category: job.category,
+    url: job.url,
+    last_seen: seenAt,
+    closed_at: null, // a requisition we can see again is not closed
+  };
+}
+
+/** Sweep one source. Returns a summary; never throws. */
+async function sweepSource(supabase, source, trigger) {
+  const startedAt = new Date().toISOString();
+
+  const { data: runRow } = await supabase
+    .from("sweep_runs")
+    .insert({ source_id: source.id, started_at: startedAt, trigger })
+    .select("id")
+    .single();
+
+  const runId = runRow?.id;
 
   try {
-    /* 1 — every requisition across configured locations */
-    const scanned = [];
-    for (const loc of LOCATIONS) {
-      const rows = await fetchRequisitionList({
-        ...SOURCE,
-        locationId: loc.id,
-      });
+    const jobs = await collectJobs(source);
+    const seenAt = new Date().toISOString();
+    const rows = jobs.map((j) => toRow(j, source.id, seenAt));
 
-      const jobs = await mapLimit(rows, CONCURRENCY, async (row) => {
-        const detail = await fetchRequisitionDetail({ ...SOURCE, id: row.Id });
-        return toJob({ summary: row, detail, ...SOURCE });
-      });
-
-      scanned.push(...jobs);
+    // first_seen is deliberately absent from the payload: on insert Postgres
+    // fills it with now(), and on conflict it is left untouched, so the
+    // original sighting date survives every later sweep
+    for (let i = 0; i < rows.length; i += UPSERT_BATCH) {
+      const batch = rows.slice(i, i + UPSERT_BATCH);
+      const { error } = await supabase
+        .from("jobs")
+        .upsert(batch, { onConflict: "source_id,external_id" });
+      if (error) throw new Error(`upsert failed: ${error.message}`);
     }
 
-    /* 2 — apply watch rules */
-    const matched = filterJobs(scanned, WATCHES);
+    // anything this source stopped returning is no longer posted
+    const { count: closedCount } = await supabase
+      .from("jobs")
+      .update({ closed_at: seenAt }, { count: "exact" })
+      .eq("source_id", source.id)
+      .lt("last_seen", startedAt)
+      .is("closed_at", null);
 
-    /* 3 — carry firstSeen forward so "new" survives across sweeps */
-    const previous = await store
-      .get("latest", { type: "json" })
-      .catch(() => null);
-    const firstSeenById = new Map(
-      (previous?.jobs || []).map((j) => [j.id, j.firstSeen])
-    );
-    const now = new Date().toISOString();
-
-    const jobs = matched.map((j) => ({
-      // description is most of the payload and the UI never renders it
-      id: j.id,
-      title: j.title,
-      company: j.company,
-      location: j.location,
-      campus: j.campus,
-      posted: j.posted,
-      category: j.category,
-      workplaceType: j.workplaceType,
-      url: j.url,
-      watchId: j.watchId,
-      watchLabel: j.watchLabel,
-      firstSeen: firstSeenById.get(j.id) || now,
-    }));
-
-    const payload = {
-      ok: true,
-      jobs,
-      sweptAt: now,
-      scannedCount: scanned.length,
-      matchedCount: jobs.length,
-      durationMs: Date.now() - started,
-      trigger,
-    };
-
-    await store.setJSON("latest", payload);
+    if (runId) {
+      await supabase
+        .from("sweep_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          scanned_count: rows.length,
+          ok: true,
+        })
+        .eq("id", runId);
+    }
 
     return {
+      source: source.name,
+      scanned: rows.length,
+      closed: closedCount ?? 0,
       ok: true,
-      scanned: scanned.length,
-      matched: jobs.length,
-      durationMs: payload.durationMs,
-      trigger,
     };
   } catch (err) {
-    // keep the last good result in place — a transient Oracle outage
-    // should not blank the app
-    await store
-      .setJSON("lastError", {
-        message: err.message,
-        name: err.name,
-        at: new Date().toISOString(),
-        trigger,
-      })
-      .catch(() => {});
+    if (runId) {
+      await supabase
+        .from("sweep_runs")
+        .update({
+          finished_at: new Date().toISOString(),
+          ok: false,
+          error: err.message,
+        })
+        .eq("id", runId);
+    }
 
-    return { ok: false, error: err.message, name: err.name, trigger };
+    return { source: source.name, ok: false, error: err.message };
   }
+}
+
+/**
+ * Sweep every enabled source, or one specific source when sourceId is given.
+ * One source failing does not stop the others.
+ */
+export async function runSweep({ trigger = "unknown", sourceId = null } = {}) {
+  const started = Date.now();
+  const supabase = getServiceClient();
+
+  let query = supabase.from("sources").select("*").eq("enabled", true);
+  if (sourceId) query = query.eq("id", sourceId);
+
+  const { data: sources, error } = await query;
+
+  if (error) {
+    return { ok: false, error: `could not read sources: ${error.message}` };
+  }
+  if (!sources?.length) {
+    return { ok: false, error: "no enabled sources configured" };
+  }
+
+  const results = [];
+  for (const source of sources) {
+    results.push(await sweepSource(supabase, source, trigger));
+  }
+
+  return {
+    ok: results.every((r) => r.ok),
+    trigger,
+    durationMs: Date.now() - started,
+    results,
+  };
 }
