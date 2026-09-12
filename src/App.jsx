@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { LOCATIONS, APP_NAME, APP_SUFFIX, STORAGE_KEY } from "./config";
+import { useAuth } from "./lib/useAuth.jsx";
+import Auth from "./Auth.jsx";
 import "./App.css";
 
 const JOBS_ENDPOINT = "/.netlify/functions/jobs";
@@ -65,11 +67,14 @@ function saveRead(read) {
   }
 }
 
-/* ---------- app ---------- */
+/* ---------- dashboard ---------- */
 
-export default function App() {
+function Dashboard() {
+  const { profile, isAdmin, signOut } = useAuth();
+
   const [jobs, setJobs] = useState([]);
-  const [read, setRead] = useState({});
+  // Lazy initialiser — React calls this once on mount, so no setState in an effect.
+  const [read, setRead] = useState(loadRead);
   const [sweptAt, setSweptAt] = useState(null);
   const [scanned, setScanned] = useState(null);
   const [phase, setPhase] = useState("loading"); // loading | sweeping | idle
@@ -95,7 +100,6 @@ export default function App() {
 
   /* initial load */
   useEffect(() => {
-    setRead(loadRead());
     (async () => {
       try {
         const data = await loadJobs();
@@ -213,6 +217,16 @@ export default function App() {
           </button>
         </header>
 
+        <div className="aw-who">
+          <span className="aw-cell">
+            {profile?.email || "—"}
+            {isAdmin && <span className="aw-admin"> · ADMIN</span>}
+          </span>
+          <button className="aw-ghost" onClick={signOut}>
+            Sign out
+          </button>
+        </div>
+
         <div className={`aw-rail ${busy ? "live" : ""}`}>
           <span className="aw-dot" />
           {LOCATIONS.map((loc, i) => (
@@ -327,4 +341,29 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+/* ---------- gate ---------- */
+
+/**
+ * Everything above requires a session. This decides whether to show it.
+ */
+export default function App() {
+  const { session, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="aw">
+        <div className="aw-wrap">
+          <div className="aw-counts">
+            <span>LOADING…</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) return <Auth />;
+
+  return <Dashboard />;
 }

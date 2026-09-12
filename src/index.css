@@ -1,5 +1,17 @@
 @import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
 
+:root {
+  --bg: #0e0e0f;
+  --bg-raised: #171719;
+  --line: #2a2a2c;
+  --line-soft: #202022;
+  --ink: #f2efe9;
+  --ink-dim: #8e8a80;
+  --brass: #c8a24a;
+  --brass-deep: #2a2003;
+  --danger: #d9705f;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -10,7 +22,8 @@ body,
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: #0a1020;
+  background: var(--bg);
+  color: var(--ink);
 }
 
 body {
