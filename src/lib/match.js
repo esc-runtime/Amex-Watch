@@ -59,12 +59,15 @@ export function jobMatchesWatch(job, watch) {
   const bodyClean = `${titleClean} ${clean(job.description)}`;
   const bodySquash = `${titleSquash}${squash(job.description)}`;
 
-  const companyHit = watch.company.some(
-    (c) =>
-      termAppears(c, companyClean, companySquash) ||
-      termAppears(c, bodyClean, bodySquash)
-  );
-  if (!companyHit) return false;
+  // Database-backed rules scope by source instead, so company is optional.
+  if (watch.company?.length) {
+    const companyHit = watch.company.some(
+      (c) =>
+        termAppears(c, companyClean, companySquash) ||
+        termAppears(c, bodyClean, bodySquash)
+    );
+    if (!companyHit) return false;
+  }
 
   return watch.keywords.some((k) => termAppears(k, bodyClean, bodySquash));
 }

@@ -13,21 +13,28 @@
  * real rate limiting, but hammering Oracle on someone else's behalf isn't on.
  */
 
-import { getStore } from "@netlify/blobs";
+import { getServiceClient } from "../lib/supabase.js";
 import { runSweep } from "../lib/runSweep.js";
 
 const COOLDOWN_MS = 60 * 60 * 1000; // one hour
 
-export default async () => {
-  const store = getStore("amexwatch");
+/** When did the last sweep touch the jobs table? */
+async function lastSweptAt() {
+  const db = getServiceClient();
 
-  const previous = await store
-    .get("latest", { type: "json" })
-    .catch(() => null);
-  const lastSwept = previous?.sweptAt
-    ? new Date(previous.sweptAt).getTime()
-    : 0;
-  const sinceLast = Date.now() - lastSwept;
+  const { data, error } = await db
+    .from("jobs")
+    .select("last_seen")
+    .order("last_seen", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.last_seen) return 0;
+  return new Date(data.last_seen).getTime();
+}
+
+export default async () => {
+  const sinceLast = Date.now() - (await lastSweptAt());
 
   if (sinceLast < COOLDOWN_MS) {
     console.log(
