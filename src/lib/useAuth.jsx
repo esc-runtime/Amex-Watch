@@ -40,14 +40,26 @@ export function AuthProvider({ children }) {
 
     let active = true;
 
-    supabase
-      .from("profiles")
-      .select("id, email, role")
-      .eq("id", session.user.id)
-      .single()
-      .then(({ data }) => {
-        if (active) setProfile(data ?? null);
-      });
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select(
+          "id, email, role, onboarded_at, admin_onboarded_at, last_seen_at"
+        )
+        .eq("id", session.user.id)
+        .single();
+
+      if (!active) return;
+      setProfile(data ?? null);
+
+      // Fire and forget — the stamp is for the admin's audience view, so a
+      // failure here should never block the app loading.
+      supabase
+        .from("profiles")
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq("id", session.user.id)
+        .then(() => {});
+    })();
 
     return () => {
       active = false;
@@ -58,11 +70,34 @@ export function AuthProvider({ children }) {
   // session disappears, which would cause a cascading render.
   const currentProfile = session?.user ? profile : null;
 
+  /**
+   * Stamp a welcome screen as seen so it doesn't reappear. Two separate flags:
+   * one for the first-run tour, one for the note someone gets when promoted.
+   */
+  async function markSeen(column) {
+    if (!currentProfile) return;
+
+    const now = new Date().toISOString();
+
+    // Optimistic — the modal should close instantly, not after a round trip.
+    setProfile({ ...currentProfile, [column]: now });
+
+    await supabase
+      .from("profiles")
+      .update({ [column]: now })
+      .eq("id", currentProfile.id);
+  }
+
   const value = {
     session,
     user: session?.user ?? null,
     profile: currentProfile,
-    isAdmin: currentProfile?.role === "admin",
+    isAdmin: ["admin", "owner"].includes(currentProfile?.role),
+    isOwner: currentProfile?.role === "owner",
+    onboarded: Boolean(currentProfile?.onboarded_at),
+    adminOnboarded: Boolean(currentProfile?.admin_onboarded_at),
+    markOnboarded: () => markSeen("onboarded_at"),
+    markAdminOnboarded: () => markSeen("admin_onboarded_at"),
     loading,
     signOut: () => supabase.auth.signOut(),
   };

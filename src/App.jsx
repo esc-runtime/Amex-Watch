@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { LOCATIONS, APP_NAME, APP_SUFFIX, STORAGE_KEY } from "./config";
 import { useAuth } from "./lib/useAuth.jsx";
+import { supabase } from "./lib/supabaseClient";
 import Auth from "./Auth.jsx";
+import Rules from "./Rules.jsx";
+import Requests from "./Requests.jsx";
+import Feedback from "./Feedback.jsx";
+import Audience from "./Audience.jsx";
+import Welcome from "./Welcome.jsx";
 import "./App.css";
 
 const JOBS_ENDPOINT = "/.netlify/functions/jobs";
@@ -70,7 +76,23 @@ function saveRead(read) {
 /* ---------- dashboard ---------- */
 
 function Dashboard() {
-  const { profile, isAdmin, signOut } = useAuth();
+  const {
+    profile,
+    isAdmin,
+    isOwner,
+    onboarded,
+    adminOnboarded,
+    markOnboarded,
+    markAdminOnboarded,
+    signOut,
+  } = useAuth();
+
+  const [view, setView] = useState("jobs");
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
+  const [welcomeReopened, setWelcomeReopened] = useState(false);
+
+  const [pending, setPending] = useState(0);
+  const [unreadFeedback, setUnreadFeedback] = useState(0);
 
   const [jobs, setJobs] = useState([]);
   // Lazy initialiser — React calls this once on mount, so no setState in an effect.
@@ -112,6 +134,41 @@ function Dashboard() {
       }
     })();
   }, [loadJobs]);
+
+  /**
+   * Counts for the notification badge. Head-only queries — we want the number,
+   * not the rows, and the rows are fetched by their own screens anyway.
+   *
+   * Runs on mount and whenever we return to the job list, so reviewing a
+   * request drops the badge without a page reload.
+   */
+  useEffect(() => {
+    if (!isAdmin || view !== "jobs") return;
+
+    let active = true;
+
+    (async () => {
+      const [req, fb] = await Promise.all([
+        supabase
+          .from("keyword_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending"),
+        supabase
+          .from("feedback")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "new"),
+      ]);
+
+      if (!active) return;
+
+      setPending(req.count ?? 0);
+      setUnreadFeedback(fb.count ?? 0);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isAdmin, view]);
 
   /* keep the countdown honest without a full re-render loop */
   useEffect(() => {
@@ -179,6 +236,25 @@ function Dashboard() {
     saveRead(next);
   };
 
+  // Derived rather than stored — no setState in an effect. The admin note
+  // takes priority: someone promoted has usually already seen the user tour.
+  const needsAdminWelcome = isAdmin && !adminOnboarded;
+  const needsUserWelcome = !isAdmin && !onboarded;
+  const welcomeVariant = needsAdminWelcome ? "admin" : "user";
+
+  const showWelcome =
+    welcomeReopened ||
+    (Boolean(profile) &&
+      !welcomeDismissed &&
+      (needsAdminWelcome || needsUserWelcome));
+
+  function closeWelcome() {
+    setWelcomeDismissed(true);
+    setWelcomeReopened(false);
+    if (welcomeVariant === "admin") markAdminOnboarded();
+    else markOnboarded();
+  }
+
   const busy = phase !== "idle";
   const remaining = cooldownRemaining(sweptAt);
   const unread = jobs.filter((j) => !read[j.id]);
@@ -197,8 +273,17 @@ function Dashboard() {
         ? "Loading…"
         : "Check jobs";
 
+  if (view === "rules") return <Rules onBack={() => setView("jobs")} />;
+  if (view === "requests") return <Requests onBack={() => setView("jobs")} />;
+  if (view === "feedback") return <Feedback onBack={() => setView("jobs")} />;
+  if (view === "audience") return <Audience onBack={() => setView("jobs")} />;
+
   return (
     <div className="aw">
+      {showWelcome && (
+        <Welcome variant={welcomeVariant} onClose={closeWelcome} />
+      )}
+
       <div className="aw-wrap">
         <header className="aw-head">
           <div>
@@ -220,11 +305,48 @@ function Dashboard() {
         <div className="aw-who">
           <span className="aw-cell">
             {profile?.email || "—"}
-            {isAdmin && <span className="aw-admin"> · ADMIN</span>}
+            {isAdmin && (
+              <span className="aw-admin"> · {isOwner ? "OWNER" : "ADMIN"}</span>
+            )}
           </span>
-          <button className="aw-ghost" onClick={signOut}>
-            Sign out
-          </button>
+          <span className="aw-actions">
+            <button
+              className="aw-ghost"
+              onClick={() => setWelcomeReopened(true)}
+            >
+              How this works
+            </button>
+            <button className="aw-ghost" onClick={() => setView("rules")}>
+              Rules
+            </button>
+            <span className="badge-wrap">
+              <button className="aw-ghost" onClick={() => setView("feedback")}>
+                Feedback
+              </button>
+              {isAdmin && unreadFeedback > 0 && (
+                <span className="badge">{unreadFeedback}</span>
+              )}
+            </span>
+            {isAdmin && (
+              <span className="badge-wrap">
+                <button
+                  className="aw-ghost"
+                  onClick={() => setView("requests")}
+                >
+                  Requests
+                </button>
+                {pending > 0 && <span className="badge">{pending}</span>}
+              </span>
+            )}
+            {isAdmin && (
+              <button className="aw-ghost" onClick={() => setView("audience")}>
+                Audience
+              </button>
+            )}
+            <button className="aw-ghost" onClick={signOut}>
+              Sign out
+            </button>
+          </span>
         </div>
 
         <div className={`aw-rail ${busy ? "live" : ""}`}>
@@ -330,7 +452,7 @@ function Dashboard() {
           <div className="aw-credit">
             BUILT BY{" "}
             <a
-              href="https://github.com/esc-runtime"
+              href="https://www.linkedin.com/in/ashutosh-choubey-833673191/"
               target="_blank"
               rel="noopener noreferrer"
             >
