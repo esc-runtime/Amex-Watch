@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 import { useAuth } from "./lib/useAuth.jsx";
+import { useToast } from "./lib/useToast.jsx";
 
 function stamp(iso) {
   if (!iso) return "never";
@@ -39,8 +40,10 @@ export default function Audience({ onBack }) {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Only for a failed load — everything else is a toast.
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const toast = useToast();
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -69,7 +72,6 @@ export default function Audience({ onBack }) {
 
   async function setRole(row, role) {
     setBusyId(row.id);
-    setError(null);
 
     const { error: err } = await supabase
       .from("profiles")
@@ -79,11 +81,14 @@ export default function Audience({ onBack }) {
     setBusyId(null);
 
     if (err) {
-      setError(err.message);
+      toast.error(`Couldn't change the role: ${err.message}`);
       return;
     }
 
     setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, role } : r)));
+    toast.success(
+      `${row.email} is now ${role === "admin" ? "an admin" : `a ${role}`}.`
+    );
   }
 
   if (loading) {

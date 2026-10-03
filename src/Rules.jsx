@@ -13,14 +13,16 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 import { useAuth } from "./lib/useAuth.jsx";
+import { useToast } from "./lib/useToast.jsx";
 
 export default function Rules({ onBack }) {
   const { user, isAdmin } = useAuth();
 
   const [rule, setRule] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Only for a failed load — everything else is a toast.
   const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
+  const toast = useToast();
   const [busy, setBusy] = useState(false);
 
   const [newKeyword, setNewKeyword] = useState("");
@@ -49,8 +51,6 @@ export default function Rules({ onBack }) {
 
   async function saveKeywords(next) {
     setBusy(true);
-    setError(null);
-    setNotice(null);
 
     const { error: err } = await supabase
       .from("watch_rules")
@@ -60,11 +60,12 @@ export default function Rules({ onBack }) {
     setBusy(false);
 
     if (err) {
-      setError(err.message);
+      toast.error(`Couldn't save keywords: ${err.message}`);
       return;
     }
 
     setRule({ ...rule, keywords: next });
+    toast.success("Keywords saved.");
   }
 
   function addKeyword() {
@@ -72,7 +73,7 @@ export default function Rules({ onBack }) {
     if (!word) return;
 
     if (rule.keywords.includes(word)) {
-      setError(`"${word}" is already in the list.`);
+      toast.error(`"${word}" is already in the list.`);
       return;
     }
 
@@ -87,12 +88,11 @@ export default function Rules({ onBack }) {
   async function submitRequest() {
     const word = requested.trim().toLowerCase();
     if (!word) {
-      setError("Enter a keyword first.");
+      toast.error("Enter a keyword first.");
       return;
     }
 
     setBusy(true);
-    setError(null);
 
     const { error: err } = await supabase.from("keyword_requests").insert({
       user_id: user.id,
@@ -103,13 +103,13 @@ export default function Rules({ onBack }) {
     setBusy(false);
 
     if (err) {
-      setError(err.message);
+      toast.error(`Couldn't send your request: ${err.message}`);
       return;
     }
 
     setRequested("");
     setAsking(false);
-    setNotice("Submitted for review.");
+    toast.success("Request sent for review.");
   }
 
   if (loading) {
@@ -167,7 +167,6 @@ export default function Rules({ onBack }) {
         </div>
 
         {error && <div className="aw-err">{error}</div>}
-        {notice && !error && <div className="aw-notice">{notice}</div>}
 
         {isAdmin && (
           <div className="rule-add">

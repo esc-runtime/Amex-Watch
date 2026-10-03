@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { useToast } from "./lib/useToast.jsx";
 
 function stamp(iso) {
   if (!iso) return "—";
@@ -24,8 +25,10 @@ export default function Requests({ onBack }) {
   const [rows, setRows] = useState([]);
   const [rule, setRule] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Only for a failed load — everything else is a toast.
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const toast = useToast();
   const [filter, setFilter] = useState("pending");
 
   useEffect(() => {
@@ -83,7 +86,6 @@ export default function Requests({ onBack }) {
 
   async function review(row, status) {
     setBusyId(row.id);
-    setError(null);
 
     // Accepting adds the keyword to the live rule as part of the same action.
     // Rule first: if that fails the request stays pending, rather than being
@@ -99,7 +101,7 @@ export default function Requests({ onBack }) {
           .eq("id", rule.id);
 
         if (ruleErr) {
-          setError(ruleErr.message);
+          toast.error(`Couldn't add the keyword: ${ruleErr.message}`);
           setBusyId(null);
           return;
         }
@@ -116,12 +118,17 @@ export default function Requests({ onBack }) {
     setBusyId(null);
 
     if (err) {
-      setError(err.message);
+      toast.error(`Couldn't update the request: ${err.message}`);
       return;
     }
 
     setRows((prev) =>
       prev.map((r) => (r.id === row.id ? { ...r, status } : r))
+    );
+    toast.success(
+      status === "accepted"
+        ? `"${row.keyword}" accepted and added.`
+        : `"${row.keyword}" rejected.`
     );
   }
 

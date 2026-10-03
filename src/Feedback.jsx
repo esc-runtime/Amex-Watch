@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 import { useAuth } from "./lib/useAuth.jsx";
+import { useToast } from "./lib/useToast.jsx";
 
 const FEEDBACK_ENDPOINT = "/.netlify/functions/feedback";
 
@@ -34,14 +35,15 @@ function stamp(iso) {
 export default function Feedback({ onBack }) {
   const { session, isAdmin } = useAuth();
   const userId = session?.user?.id ?? null;
+  const toast = useToast();
 
   const [rows, setRows] = useState([]);
   const [body, setBody] = useState("");
   // Guests have no history to fetch, so they never start in a loading state.
   const [loading, setLoading] = useState(() => Boolean(userId));
   const [busy, setBusy] = useState(false);
+  // Only for a failed load — everything else is a toast.
   const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -58,7 +60,7 @@ export default function Feedback({ onBack }) {
       if (!active) return;
 
       if (err) {
-        setError(err.message);
+        setError("Couldn't load messages. Please reload the page.");
         setLoading(false);
         return;
       }
@@ -95,13 +97,11 @@ export default function Feedback({ onBack }) {
     const text = body.trim();
 
     if (!text) {
-      setError("Write something first.");
+      toast.error("Write something first.");
       return;
     }
 
     setBusy(true);
-    setError(null);
-    setNotice(null);
 
     const headers = { "Content-Type": "application/json" };
     if (session?.access_token) {
@@ -126,12 +126,12 @@ export default function Feedback({ onBack }) {
     setBusy(false);
 
     if (!result.ok) {
-      setError(result.message || "Could not send your message.");
+      toast.error(result.message || "Could not send your message.");
       return;
     }
 
     setBody("");
-    setNotice("Thanks! We've got your message.");
+    toast.success("Thanks! We've got your message.");
 
     // Signed-in users see their own history, so show the new one straight
     // away instead of refetching.
@@ -151,7 +151,6 @@ export default function Feedback({ onBack }) {
 
   async function markRead(row) {
     setBusy(true);
-    setError(null);
 
     const { error: err } = await supabase
       .from("feedback")
@@ -161,7 +160,7 @@ export default function Feedback({ onBack }) {
     setBusy(false);
 
     if (err) {
-      setError(err.message);
+      toast.error(`Couldn't mark as read: ${err.message}`);
       return;
     }
 
@@ -218,7 +217,6 @@ export default function Feedback({ onBack }) {
         )}
 
         {error && <div className="aw-err">{error}</div>}
-        {notice && !error && <div className="aw-notice">{notice}</div>}
 
         {!isAdmin && (
           <div className="fb-compose">

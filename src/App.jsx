@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { LOCATIONS, APP_NAME, APP_SUFFIX, STORAGE_KEY } from "./config";
 import { useAuth } from "./lib/useAuth.jsx";
+import { useToast } from "./lib/useToast.jsx";
 import { supabase } from "./lib/supabaseClient";
 import Auth from "./Auth.jsx";
 import Rules from "./Rules.jsx";
@@ -145,6 +146,7 @@ function Dashboard({ onSignIn, onSignOut }) {
 
   // Guests see the full job list. Signing in only adds extras on top.
   const signedIn = Boolean(session);
+  const toast = useToast();
 
   const [view, setView] = useState("jobs");
   const [welcomeDismissed, setWelcomeDismissed] = useState(false);
@@ -164,6 +166,7 @@ function Dashboard({ onSignIn, onSignOut }) {
   const [, forceTick] = useState(0);
 
   const sweptAtRef = useRef(null);
+  const jobsRef = useRef([]);
 
   /** Read whatever the last sweep stored. Cheap — no Oracle call. */
   const loadJobs = useCallback(async () => {
@@ -172,6 +175,7 @@ function Dashboard({ onSignIn, onSignOut }) {
     const data = await res.json();
 
     setJobs(data.jobs || []);
+    jobsRef.current = data.jobs || [];
     setSweptAt(data.sweptAt || null);
     setScanned(data.scannedCount ?? null);
     sweptAtRef.current = data.sweptAt || null;
@@ -186,13 +190,17 @@ function Dashboard({ onSignIn, onSignOut }) {
         const data = await loadJobs();
         if (data.ok === false)
           setNotice(data.message || "No sweep has run yet.");
-      } catch (e) {
-        setError(e.message || "Could not reach the server.");
+      } catch {
+        // Stays on screen as well: without it the page would just look empty.
+        setError(
+          "Couldn't load jobs. Please check your connection and reload the page."
+        );
+        toast.error("Couldn't load jobs. Please reload the page.");
       } finally {
         setPhase("idle");
       }
     })();
-  }, [loadJobs]);
+  }, [loadJobs, toast]);
 
   /**
    * Counts for the notification badge. Head-only queries — we want the number,
@@ -243,7 +251,7 @@ function Dashboard({ onSignIn, onSignOut }) {
   const refreshJobs = useCallback(async () => {
     const remaining = cooldownRemaining(sweptAtRef.current);
     if (remaining > 0) {
-      setNotice(
+      toast.info(
         `Already refreshed recently. Try again in ${formatRemaining(remaining)}.`
       );
       return;
@@ -254,6 +262,7 @@ function Dashboard({ onSignIn, onSignOut }) {
     setNotice(null);
 
     const before = sweptAtRef.current;
+    const seenIds = new Set(jobsRef.current.map((j) => j.id));
 
     try {
       const res = await fetch(SWEEP_ENDPOINT, { method: "POST" });
@@ -265,20 +274,27 @@ function Dashboard({ onSignIn, onSignOut }) {
         await sleep(POLL_INTERVAL_MS);
         const data = await loadJobs();
         if (data.sweptAt && data.sweptAt !== before) {
-          setNotice(null);
+          const found = (data.jobs || []).filter(
+            (j) => !seenIds.has(j.id)
+          ).length;
+          toast.success(
+            found > 0
+              ? `Jobs refreshed. ${found} new ${found === 1 ? "job" : "jobs"} found!`
+              : "Jobs refreshed. No new jobs right now."
+          );
           return;
         }
       }
 
-      setNotice(
+      toast.info(
         "This is taking longer than usual. New jobs will appear shortly."
       );
-    } catch (e) {
-      setError(e.message || "Could not refresh jobs.");
+    } catch {
+      toast.error("Couldn't refresh jobs. Please try again later.");
     } finally {
       setPhase("idle");
     }
-  }, [loadJobs]);
+  }, [loadJobs, toast]);
 
   const markRead = (id) => {
     const next = { ...read, [id]: true };
@@ -552,7 +568,15 @@ function Dashboard({ onSignIn, onSignOut }) {
  */
 export default function App() {
   const { session, loading, signOut } = useAuth();
+  const toast = useToast();
   const [showAuth, setShowAuth] = useState(false);
+
+  async function handleSignOut() {
+    setShowAuth(false);
+    const { error } = await signOut();
+    if (error) toast.error("Couldn't sign you out. Please try again.");
+    else toast.success("Signed out successfully.");
+  }
 
   if (loading) {
     return (
@@ -569,12 +593,6 @@ export default function App() {
   if (!session && showAuth) return <Auth onBack={() => setShowAuth(false)} />;
 
   return (
-    <Dashboard
-      onSignIn={() => setShowAuth(true)}
-      onSignOut={() => {
-        setShowAuth(false);
-        signOut();
-      }}
-    />
+    <Dashboard onSignIn={() => setShowAuth(true)} onSignOut={handleSignOut} />
   );
 }

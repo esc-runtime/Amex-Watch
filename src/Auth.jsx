@@ -13,28 +13,36 @@
 
 import { useState } from "react";
 import { supabase } from "./lib/supabaseClient";
+import { useToast } from "./lib/useToast.jsx";
+
+/** Supabase's wording for a bad email/password pair, in plainer words. */
+function friendly(message) {
+  if (/invalid login credentials/i.test(message)) {
+    return "Wrong email or password. Please try again.";
+  }
+  return message;
+}
 
 export default function Auth({ onBack }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
+  const toast = useToast();
 
   const isLogin = mode === "login";
 
   async function handleSubmit() {
-    setError(null);
     setNotice(null);
 
     if (!email.trim() || !password) {
-      setError("Email and password are both required.");
+      toast.error("Please enter both your email and password.");
       return;
     }
 
     if (!isLogin && password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      toast.error("Password must be at least 8 characters.");
       return;
     }
 
@@ -49,19 +57,28 @@ export default function Auth({ onBack }) {
     setBusy(false);
 
     if (authError) {
-      setError(authError.message);
+      toast.error(friendly(authError.message));
       return;
     }
 
-    // Signup with email confirmation on returns a user but no session.
-    if (!isLogin && !data.session) {
-      setNotice("Check your email to confirm your account, then sign in.");
+    if (isLogin) {
+      toast.success("Signed in successfully.");
+      return;
     }
+
+    // Signup with email confirmation on returns a user but no session. The
+    // instruction stays on screen, since they need it after the toast goes.
+    if (!data.session) {
+      toast.success("Account created!");
+      setNotice("Check your email to confirm your account, then sign in.");
+      return;
+    }
+
+    toast.success("Account created. You're signed in.");
   }
 
   function switchMode() {
     setMode(isLogin ? "signup" : "login");
-    setError(null);
     setNotice(null);
   }
 
@@ -103,7 +120,6 @@ export default function Auth({ onBack }) {
         />
       </div>
 
-      {error && <div className="auth-error">{error}</div>}
       {notice && <div className="auth-notice">{notice}</div>}
 
       <button className="auth-submit" onClick={handleSubmit} disabled={busy}>
