@@ -1,5 +1,10 @@
 /**
- * Feedback — write for users, read for admins.
+ * Feedback — anyone can write, admins read.
+ *
+ * Guests and signed-in users both send through the feedback Netlify function,
+ * which applies the daily limits. Signed-in users also see what they've sent
+ * before; guests just get a thank-you, since there's no account to tie a
+ * history to.
  *
  * Not approved or rejected like keyword requests, just acknowledged. The
  * status flips new → read when the admin has seen it, which is what clears
@@ -10,6 +15,14 @@ import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 import { useAuth } from "./lib/useAuth.jsx";
 
+const FEEDBACK_ENDPOINT = "/.netlify/functions/feedback";
+
+/** Must match MAX_LENGTH in netlify/functions/feedback.js and the SQL. */
+const MAX_LENGTH = 1000;
+
+/** Counter turns amber with this many characters left. */
+const WARN_AT = 100;
+
 function stamp(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-IN", {
@@ -19,16 +32,20 @@ function stamp(iso) {
 }
 
 export default function Feedback({ onBack }) {
-  const { user, isAdmin } = useAuth();
+  const { session, isAdmin } = useAuth();
+  const userId = session?.user?.id ?? null;
 
   const [rows, setRows] = useState([]);
   const [body, setBody] = useState("");
-  const [loading, setLoading] = useState(true);
+  // Guests have no history to fetch, so they never start in a loading state.
+  const [loading, setLoading] = useState(() => Boolean(userId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
   useEffect(() => {
+    if (!userId) return;
+
     let active = true;
 
     (async () => {
@@ -46,7 +63,10 @@ export default function Feedback({ onBack }) {
         return;
       }
 
-      const ids = [...new Set((data || []).map((r) => r.user_id))];
+      // Guest messages have no user_id, so leave them out of the lookup.
+      const ids = [
+        ...new Set((data || []).map((r) => r.user_id).filter(Boolean)),
+      ];
       const emails = {};
 
       if (isAdmin && ids.length) {
@@ -69,7 +89,7 @@ export default function Feedback({ onBack }) {
     return () => {
       active = false;
     };
-  }, [isAdmin]);
+  }, [isAdmin, userId]);
 
   async function submit() {
     const text = body.trim();
@@ -81,23 +101,52 @@ export default function Feedback({ onBack }) {
 
     setBusy(true);
     setError(null);
+    setNotice(null);
 
-    const { data, error: err } = await supabase
-      .from("feedback")
-      .insert({ user_id: user.id, body: text })
-      .select("id, body, status, created_at, user_id")
-      .single();
+    const headers = { "Content-Type": "application/json" };
+    if (session?.access_token) {
+      headers.Authorization = `Bearer ${session.access_token}`;
+    }
+
+    let result;
+    try {
+      const res = await fetch(FEEDBACK_ENDPOINT, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ body: text }),
+      });
+      result = await res.json();
+    } catch {
+      result = {
+        ok: false,
+        message: "Could not send your message right now. Please try again.",
+      };
+    }
 
     setBusy(false);
 
-    if (err) {
-      setError(err.message);
+    if (!result.ok) {
+      setError(result.message || "Could not send your message.");
       return;
     }
 
     setBody("");
-    setNotice("Sent. Thanks.");
-    setRows((prev) => [data, ...prev]);
+    setNotice("Thanks! We've got your message.");
+
+    // Signed-in users see their own history, so show the new one straight
+    // away instead of refetching.
+    if (userId) {
+      setRows((prev) => [
+        {
+          id: `local-${Date.now()}`,
+          body: text,
+          status: "new",
+          created_at: new Date().toISOString(),
+          user_id: userId,
+        },
+        ...prev,
+      ]);
+    }
   }
 
   async function markRead(row) {
@@ -134,21 +183,28 @@ export default function Feedback({ onBack }) {
   }
 
   const unread = rows.filter((r) => r.status === "new").length;
+  const left = MAX_LENGTH - body.length;
+  const counterClass =
+    left === 0
+      ? "fb-count zero"
+      : left <= WARN_AT
+        ? "fb-count warn"
+        : "fb-count";
 
   return (
     <div className="aw">
       <div className="aw-wrap">
         <header className="aw-head">
           <div>
-            <h1 className="aw-title">FEEDBACK</h1>
+            <h1 className="aw-title">{isAdmin ? "FEEDBACK" : "TELL US"}</h1>
             <p className="aw-sub">
               {isAdmin
-                ? "What users have said about the app."
-                : "What's annoying, what's missing, what would make this worth opening. It goes straight to the admin."}
+                ? "What people have said about the app."
+                : "A new feature, a company you want added, or something that bugs you. We read every message."}
             </p>
           </div>
           <button className="aw-ghost" onClick={onBack}>
-            Back to jobs
+            ← Back to jobs
           </button>
         </header>
 
@@ -169,52 +225,64 @@ export default function Feedback({ onBack }) {
             <textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="Anything at all"
-              rows={4}
+              placeholder="Type your idea here"
+              rows={5}
+              maxLength={MAX_LENGTH}
               disabled={busy}
+              aria-describedby="fb-count"
             />
-            <button className="aw-btn" onClick={submit} disabled={busy}>
-              {busy ? "Sending…" : "Send feedback"}
+            <span id="fb-count" className={counterClass} aria-live="polite">
+              {left} {left === 1 ? "character" : "characters"} left
+            </span>
+            <button
+              className="aw-btn"
+              onClick={submit}
+              disabled={busy || !body.trim()}
+            >
+              {busy ? "Sending…" : "Send"}
             </button>
           </div>
         )}
 
-        {rows.length === 0 ? (
-          <div className="aw-empty">
-            <b>Nothing yet</b>
-            {isAdmin
-              ? "No feedback has come in."
-              : "You haven't sent any feedback."}
-          </div>
-        ) : (
-          <div className="aw-list">
-            {rows.map((r) => (
-              <article key={r.id} className="aw-job">
-                <div className="aw-jobtop">
-                  {r.status === "new" && isAdmin && (
-                    <span className="aw-tag">NEW</span>
-                  )}
-                  <span className="aw-meta">
-                    {isAdmin ? r.email || "unknown user" : "You"} ·{" "}
-                    {stamp(r.created_at).toUpperCase()}
-                  </span>
-                </div>
-                <p className="fb-body">{r.body}</p>
-                {isAdmin && r.status === "new" && (
-                  <div className="aw-jobfoot">
-                    <button
-                      className="aw-ghost"
-                      onClick={() => markRead(r)}
-                      disabled={busy}
-                    >
-                      Mark read
-                    </button>
+        {userId &&
+          (rows.length === 0 ? (
+            <div className="aw-empty">
+              <b>Nothing yet</b>
+              {isAdmin
+                ? "No feedback has come in."
+                : "You haven't sent any feedback."}
+            </div>
+          ) : (
+            <div className="aw-list">
+              {rows.map((r) => (
+                <article key={r.id} className="aw-job">
+                  <div className="aw-jobtop">
+                    {r.status === "new" && isAdmin && (
+                      <span className="aw-tag">NEW</span>
+                    )}
+                    <span className="aw-meta">
+                      {isAdmin
+                        ? r.email || (r.user_id ? "unknown user" : "Guest")
+                        : "You"}{" "}
+                      · {stamp(r.created_at).toUpperCase()}
+                    </span>
                   </div>
-                )}
-              </article>
-            ))}
-          </div>
-        )}
+                  <p className="fb-body">{r.body}</p>
+                  {isAdmin && r.status === "new" && (
+                    <div className="aw-jobfoot">
+                      <button
+                        className="aw-ghost"
+                        onClick={() => markRead(r)}
+                        disabled={busy}
+                      >
+                        Mark read
+                      </button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          ))}
       </div>
     </div>
   );

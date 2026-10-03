@@ -1,6 +1,9 @@
 /**
  * Login and signup.
  *
+ * Optional. Guests reach this only by tapping "Sign in" on the job list, and
+ * onBack takes them straight back without an account.
+ *
  * One component, two modes. Supabase handles the password hashing, session
  * issuing and email uniqueness, so this is mostly form state and error display.
  *
@@ -11,7 +14,7 @@
 import { useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 
-export default function Auth() {
+export default function Auth({ onBack }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -70,8 +73,8 @@ export default function Auth() {
 
       <p className="auth-sub">
         {isLogin
-          ? "Sign in to see roles matching the watch rules."
-          : "Create an account to start watching."}
+          ? "Sign in to send feedback and use extra features."
+          : "Create a free account to send feedback and use extra features."}
       </p>
 
       <div className="auth-field">
@@ -112,6 +115,12 @@ export default function Auth() {
           ? "No account? Create one"
           : "Already have an account? Sign in"}
       </button>
+
+      {onBack && (
+        <button className="auth-switch" onClick={onBack} disabled={busy}>
+          ← Back to jobs
+        </button>
+      )}
     </div>
   );
 }

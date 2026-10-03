@@ -61,6 +61,26 @@
   color: #a0906c;
   cursor: wait;
 }
+/* cooldown: faded and clearly not clickable, unlike the busy state */
+.aw-btn.cooling:disabled {
+  background: var(--brass);
+  color: var(--brass-deep);
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.aw-refresh {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+}
+.aw-refresh-note {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
 .aw-ghost {
   background: none;
   border: 1px solid var(--line);
@@ -76,6 +96,19 @@
 .aw-ghost:hover {
   border-color: var(--brass);
   color: var(--brass);
+}
+/* a link dressed as a button — same look as .aw-ghost */
+a.aw-ghost {
+  display: inline-block;
+  text-decoration: none;
+}
+.aw-apply {
+  border-color: var(--brass);
+  color: var(--brass);
+}
+.aw-apply:hover {
+  background: var(--brass);
+  color: var(--brass-deep);
 }
 .aw-btn:focus-visible,
 .aw-ghost:focus-visible,
@@ -385,15 +418,20 @@
 
 .auth-switch {
   background: none;
-  border: 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
   color: var(--ink-dim);
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   font-size: 13px;
   cursor: pointer;
-  padding: 14px 4px 0;
-  transition: color 0.15s ease;
+  padding: 10px 16px;
+  margin-top: 12px;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 .auth-switch:hover {
+  border-color: var(--brass);
   color: var(--brass);
 }
 
@@ -658,6 +696,21 @@
 }
 .fb-compose textarea::placeholder {
   color: #5c574f;
+}
+.fb-count {
+  align-self: flex-end;
+  margin-top: -4px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.fb-count.warn {
+  color: var(--brass);
+}
+.fb-count.zero {
+  color: var(--danger);
 }
 
 .fb-body {

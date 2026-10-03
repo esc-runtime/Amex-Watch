@@ -14,7 +14,7 @@ const JOBS_ENDPOINT = "/.netlify/functions/jobs";
 const SWEEP_ENDPOINT = "/.netlify/functions/sweep-background";
 
 /** Must match COOLDOWN_MS in netlify/functions/sweep-background.js. */
-const COOLDOWN_MS = 60 * 60 * 1000;
+const COOLDOWN_MS = 2 * 60 * 60 * 1000; // two hours
 
 /** A sweep takes ~9s; poll a little beyond that before giving up. */
 const POLL_INTERVAL_MS = 2000;
@@ -53,6 +53,15 @@ function formatRemaining(ms) {
   return `${mins} minutes`;
 }
 
+/** 1:59:42 style countdown. */
+function formatClock(ms) {
+  const total = Math.ceil(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const s = String(total % 60).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Only read/unread flags live in the browser; job data always comes fresh. */
@@ -73,10 +82,58 @@ function saveRead(read) {
   }
 }
 
+/* ---------- refresh button ---------- */
+
+/**
+ * Owns its own one-second tick, so the live countdown re-renders only this
+ * button rather than the whole job list. The cooldown is shared by everyone:
+ * it runs from the last sweep, whoever or whatever triggered it.
+ */
+function RefreshButton({ sweptAt, phase, onRefresh }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  const elapsed = sweptAt ? now - new Date(sweptAt).getTime() : COOLDOWN_MS;
+  const remaining = Math.min(COOLDOWN_MS, Math.max(0, COOLDOWN_MS - elapsed));
+  const cooling = remaining > 0;
+
+  useEffect(() => {
+    if (!cooling) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [cooling, sweptAt]);
+
+  const busy = phase !== "idle";
+
+  const label =
+    phase === "sweeping"
+      ? "Refreshing…"
+      : phase === "loading"
+        ? "Loading…"
+        : "Refresh jobs";
+
+  return (
+    <div className="aw-refresh">
+      <button
+        className={`aw-btn ${cooling && !busy ? "cooling" : ""}`}
+        onClick={onRefresh}
+        disabled={busy || cooling}
+      >
+        {label}
+      </button>
+      {cooling && !busy && (
+        <span className="aw-refresh-note">
+          Next refresh available in {formatClock(remaining)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* ---------- dashboard ---------- */
 
-function Dashboard() {
+function Dashboard({ onSignIn, onSignOut }) {
   const {
+    session,
     profile,
     isAdmin,
     isOwner,
@@ -84,8 +141,10 @@ function Dashboard() {
     adminOnboarded,
     markOnboarded,
     markAdminOnboarded,
-    signOut,
   } = useAuth();
+
+  // Guests see the full job list. Signing in only adds extras on top.
+  const signedIn = Boolean(session);
 
   const [view, setView] = useState("jobs");
   const [welcomeDismissed, setWelcomeDismissed] = useState(false);
@@ -170,7 +229,7 @@ function Dashboard() {
     };
   }, [isAdmin, view]);
 
-  /* keep the countdown honest without a full re-render loop */
+  /* keep "checked Xm ago" honest without a full re-render loop */
   useEffect(() => {
     const t = setInterval(() => forceTick((n) => n + 1), 30000);
     return () => clearInterval(t);
@@ -181,11 +240,11 @@ function Dashboard() {
    * Background functions answer 202 straight away, so the new result only
    * appears once the work behind it finishes.
    */
-  const checkForJobs = useCallback(async () => {
+  const refreshJobs = useCallback(async () => {
     const remaining = cooldownRemaining(sweptAtRef.current);
     if (remaining > 0) {
       setNotice(
-        `Already checked recently. Try again in ${formatRemaining(remaining)}.`
+        `Already refreshed recently. Try again in ${formatRemaining(remaining)}.`
       );
       return;
     }
@@ -212,10 +271,10 @@ function Dashboard() {
       }
 
       setNotice(
-        "The sweep is taking longer than usual. Results will appear on the next refresh."
+        "This is taking longer than usual. New jobs will appear shortly."
       );
     } catch (e) {
-      setError(e.message || "Could not run the sweep.");
+      setError(e.message || "Could not refresh jobs.");
     } finally {
       setPhase("idle");
     }
@@ -256,7 +315,6 @@ function Dashboard() {
   }
 
   const busy = phase !== "idle";
-  const remaining = cooldownRemaining(sweptAt);
   const unread = jobs.filter((j) => !read[j.id]);
 
   const ordered = [...jobs].sort((a, b) => {
@@ -265,13 +323,6 @@ function Dashboard() {
     if (au !== bu) return au - bu;
     return new Date(b.firstSeen) - new Date(a.firstSeen);
   });
-
-  const buttonLabel =
-    phase === "sweeping"
-      ? "Checking…"
-      : phase === "loading"
-        ? "Loading…"
-        : "Check jobs";
 
   if (view === "rules") return <Rules onBack={() => setView("jobs")} />;
   if (view === "requests") return <Requests onBack={() => setView("jobs")} />;
@@ -297,57 +348,84 @@ function Dashboard() {
               opened yet is flagged.
             </p>
           </div>
-          <button className="aw-btn" onClick={checkForJobs} disabled={busy}>
-            {buttonLabel}
-          </button>
+          <RefreshButton
+            sweptAt={sweptAt}
+            phase={phase}
+            onRefresh={refreshJobs}
+          />
         </header>
 
-        <div className="aw-who">
-          <span className="aw-cell">
-            {profile?.email || "—"}
-            {isAdmin && (
-              <span className="aw-admin"> · {isOwner ? "OWNER" : "ADMIN"}</span>
-            )}
-          </span>
-          <span className="aw-actions">
-            <button
-              className="aw-ghost"
-              onClick={() => setWelcomeReopened(true)}
-            >
-              How this works
-            </button>
-            <button className="aw-ghost" onClick={() => setView("rules")}>
-              Rules
-            </button>
-            <span className="badge-wrap">
+        {!signedIn && (
+          <div className="aw-who">
+            <span className="aw-cell">Browsing as a guest</span>
+            <span className="aw-actions">
               <button className="aw-ghost" onClick={() => setView("feedback")}>
-                Feedback
+                Want something new? Tell us
               </button>
-              {isAdmin && unreadFeedback > 0 && (
-                <span className="badge">{unreadFeedback}</span>
+              <button className="aw-ghost" onClick={onSignIn}>
+                Sign in
+              </button>
+            </span>
+          </div>
+        )}
+
+        {signedIn && (
+          <div className="aw-who">
+            <span className="aw-cell">
+              {profile?.email || "—"}
+              {isAdmin && (
+                <span className="aw-admin">
+                  {" "}
+                  · {isOwner ? "OWNER" : "ADMIN"}
+                </span>
               )}
             </span>
-            {isAdmin && (
+            <span className="aw-actions">
+              <button
+                className="aw-ghost"
+                onClick={() => setWelcomeReopened(true)}
+              >
+                How this works
+              </button>
+              <button className="aw-ghost" onClick={() => setView("rules")}>
+                Rules
+              </button>
               <span className="badge-wrap">
                 <button
                   className="aw-ghost"
-                  onClick={() => setView("requests")}
+                  onClick={() => setView("feedback")}
                 >
-                  Requests
+                  {isAdmin ? "Feedback" : "Want something new? Tell us"}
                 </button>
-                {pending > 0 && <span className="badge">{pending}</span>}
+                {isAdmin && unreadFeedback > 0 && (
+                  <span className="badge">{unreadFeedback}</span>
+                )}
               </span>
-            )}
-            {isAdmin && (
-              <button className="aw-ghost" onClick={() => setView("audience")}>
-                Audience
+              {isAdmin && (
+                <span className="badge-wrap">
+                  <button
+                    className="aw-ghost"
+                    onClick={() => setView("requests")}
+                  >
+                    Requests
+                  </button>
+                  {pending > 0 && <span className="badge">{pending}</span>}
+                </span>
+              )}
+              {isAdmin && (
+                <button
+                  className="aw-ghost"
+                  onClick={() => setView("audience")}
+                >
+                  Audience
+                </button>
+              )}
+              <button className="aw-ghost" onClick={onSignOut}>
+                Sign out
               </button>
-            )}
-            <button className="aw-ghost" onClick={signOut}>
-              Sign out
-            </button>
-          </span>
-        </div>
+            </span>
+          </div>
+        )}
 
         <div className={`aw-rail ${busy ? "live" : ""}`}>
           <span className="aw-dot" />
@@ -361,14 +439,6 @@ function Dashboard() {
             <>
               <span className="aw-sep">/</span>
               <span className="aw-cell">{scanned} SCANNED</span>
-            </>
-          )}
-          {remaining > 0 && (
-            <>
-              <span className="aw-sep">/</span>
-              <span className="aw-cell">
-                NEXT CHECK IN {formatRemaining(remaining).toUpperCase()}
-              </span>
             </>
           )}
         </div>
@@ -428,16 +498,25 @@ function Dashboard() {
                       <span>· {j.watchLabel.toUpperCase()}</span>
                     )}
                   </div>
-                  {isNew && (
-                    <div className="aw-jobfoot">
+                  <div className="aw-jobfoot">
+                    {isNew && (
                       <button
                         className="aw-ghost"
                         onClick={() => markRead(j.id)}
                       >
                         Mark read
                       </button>
-                    </div>
-                  )}
+                    )}
+                    <a
+                      className="aw-ghost aw-apply"
+                      href={j.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => markRead(j.id)}
+                    >
+                      View &amp; apply ↗
+                    </a>
+                  </div>
                 </article>
               );
             })}
@@ -447,8 +526,8 @@ function Dashboard() {
         <footer className="aw-foot">
           LIVE DATA FROM THE AMERICAN EXPRESS CAREERS API.
           <br />
-          CHECKS AUTOMATICALLY EVERY SIX HOURS · MANUAL CHECK ALLOWED ONCE AN
-          HOUR.
+          CHECKS AUTOMATICALLY EVERY SIX HOURS · REFRESH AVAILABLE EVERY TWO
+          HOURS.
           <div className="aw-credit">
             BUILT BY{" "}
             <a
@@ -468,10 +547,12 @@ function Dashboard() {
 /* ---------- gate ---------- */
 
 /**
- * Everything above requires a session. This decides whether to show it.
+ * The job list is public. The sign-in screen only appears when a guest asks
+ * for it, and a signed-in session always goes straight to the dashboard.
  */
 export default function App() {
-  const { session, loading } = useAuth();
+  const { session, loading, signOut } = useAuth();
+  const [showAuth, setShowAuth] = useState(false);
 
   if (loading) {
     return (
@@ -485,7 +566,15 @@ export default function App() {
     );
   }
 
-  if (!session) return <Auth />;
+  if (!session && showAuth) return <Auth onBack={() => setShowAuth(false)} />;
 
-  return <Dashboard />;
+  return (
+    <Dashboard
+      onSignIn={() => setShowAuth(true)}
+      onSignOut={() => {
+        setShowAuth(false);
+        signOut();
+      }}
+    />
+  );
 }

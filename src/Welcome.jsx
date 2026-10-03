@@ -91,9 +91,9 @@ export default function Welcome({ variant = "user", onClose }) {
         <div className="wel-section">
           <h2 className="wel-h">It checks on its own</h2>
           <p>
-            Four times a day, automatically. If you&apos;re impatient, Check
-            jobs runs one right now — once an hour at most, so we&apos;re not
-            pounding their servers.
+            Four times a day, automatically. If you&apos;re impatient, Refresh
+            jobs runs one right now — once every two hours at most, so
+            we&apos;re not pounding their servers.
           </p>
         </div>
 

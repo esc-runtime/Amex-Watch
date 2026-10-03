@@ -16,7 +16,7 @@
 import { getServiceClient } from "../lib/supabase.js";
 import { runSweep } from "../lib/runSweep.js";
 
-const COOLDOWN_MS = 60 * 60 * 1000; // one hour
+const COOLDOWN_MS = 2 * 60 * 60 * 1000; // two hours — must match App.jsx
 
 /** When did the last sweep touch the jobs table? */
 async function lastSweptAt() {
